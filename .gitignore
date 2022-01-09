@@ -1,0 +1,6 @@
+py3env/
+__pycache__/
+.*.swp
+*.txt
+*.log
+*.pyc
