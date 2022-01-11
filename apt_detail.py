@@ -2,11 +2,13 @@
 
 from bs4 import BeautifulSoup
 from common import sess
-from google import load_comments
+from time import sleep
 
 import bs4
+import google
 import json
 import locale
+import random
 import re
 import sys
 
@@ -20,11 +22,33 @@ class ApartmentPage():
     def __init__(self, html_text, apt_summary):
         self.soup = BeautifulSoup(html_text.replace('–', '-'), 'html.parser')
         self.apt = apt_summary
+        self._extract_apt_name()
+        self._extract_apt_address()
         self._extract_apt_overall()
         self._extract_floor_plans()
         self._extract_description()
         self._extract_contact()
         self._extract_amenities()
+        self._get_google_reviews()
+
+    def _extract_apt_name(self):
+        if 'name' in self.apt:
+            return
+        name = self.soup.find('h1', id='propertyName').text
+        self.apt['name'] = name.strip('\r\n ')
+
+    def _extract_apt_address(self):
+        if 'street' in self.apt:
+            return
+        address = {}
+        addr_container = self.soup.find('div', class_='propertyAddressContainer')
+        street_city = addr_container.find_all('span', limit=2)
+        address['street'] = street_city[0].text
+        address['city'] = street_city[1].text
+        statezip = addr_container.find('span', class_='stateZipContainer').find_all('span')
+        address['state'] = statezip[0].text
+        address['zipcode'] = statezip[1].text
+        self.apt.update(address)
 
     @staticmethod
     def _extract_price_range(text):
@@ -213,6 +237,41 @@ class ApartmentPage():
             title = cat.text
             amenities[title] = self._get_amenities_of_a_category(cat)
         self.apt['amenities'] = amenities
+
+    def _filter_reviews(self, reviews):
+        res = []
+        for r in reviews:
+            if 'review_text' not in r:
+                continue
+            if 'thumbs_up_count' not in r:
+                r['thumbs_up_count'] = 0
+            res.append({
+                'author': r['author_real_name'],
+                'publish_date': r['publish_date'],
+                'review_text': r['review_text'],
+                'rating': r['star_rating']['value'],
+                'translated': r['translated'],
+                'thumbs_up_count': r['thumbs_up_count']
+            })
+        return res
+
+    def _get_google_reviews(self):
+        keyword = '%s %s %s %s' % (
+            self.name, self.street, self.city, self.state
+        )
+        search_res = google.search(keyword)
+        fid = google.extract_feature_id(search_res)
+        all_reviews = []
+        next_page = ''
+        while True:
+            sleep(random.randint(1000, 10000) / 1000)
+            reviews, next_page = google.load_comments(fid,
+                    sort_by='newestFirst', next_page_token=next_page)
+            print('Retrieved %d reviews' % len(reviews), file=sys.stderr)
+            all_reviews.extend(self._filter_reviews(reviews))
+            if not next_page:
+                break
+        self.apt['reviews'] = all_reviews
 
     def __getattr__(self, key):
         if key not in self.apt:
